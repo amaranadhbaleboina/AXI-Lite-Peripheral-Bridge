@@ -1,0 +1,208 @@
+module busbridge_axi_lite_peripheral #(
+    parameter integer C_S_AXI_DATA_WIDTH = 32,
+    parameter integer C_S_AXI_ADDR_WIDTH = 4
+)(
+    // Global Clock and Reset
+    input  wire                          S_AXI_ACLK,
+    input  wire                          S_AXI_ARESETN,
+
+    // Write Address Channel
+    input  wire [C_S_AXI_ADDR_WIDTH-1:0] S_AXI_AWADDR,
+    input  wire [2:0]                    S_AXI_AWPROT, 
+    input  wire                          S_AXI_AWVALID,
+    output reg                           S_AXI_AWREADY,
+
+    // Write Data Channel
+    input  wire [C_S_AXI_DATA_WIDTH-1:0] S_AXI_WDATA,
+    input  wire [(C_S_AXI_DATA_WIDTH/8)-1:0] S_AXI_WSTRB,
+    input  wire                          S_AXI_WVALID,
+    output reg                           S_AXI_WREADY,
+
+    // Write Response Channel
+    output reg  [1:0]                    S_AXI_BRESP,
+    output reg                           S_AXI_BVALID,
+    input  wire                          S_AXI_BREADY,
+
+    // Read Address Channel
+    input  wire [C_S_AXI_ADDR_WIDTH-1:0] S_AXI_ARADDR,
+    input  wire [2:0]                    S_AXI_ARPROT, 
+    input  wire                          S_AXI_ARVALID,
+    output reg                           S_AXI_ARREADY,
+
+    // Read Data Channel
+    output reg  [C_S_AXI_DATA_WIDTH-1:0] S_AXI_RDATA,
+    output reg  [1:0]                    S_AXI_RRESP,
+    output reg                           S_AXI_RVALID,
+    input  wire                          S_AXI_RREADY,
+
+    // Peripheral Hardware Interface
+    output wire                          o_intr
+);
+
+    // Internal Registers (Register Map)
+    reg [C_S_AXI_DATA_WIDTH-1:0] reg_ctrl;   
+    reg [C_S_AXI_DATA_WIDTH-1:0] reg_status; 
+    reg [C_S_AXI_DATA_WIDTH-1:0] reg_data0;  
+    reg [C_S_AXI_DATA_WIDTH-1:0] reg_data1;  
+
+    reg [C_S_AXI_ADDR_WIDTH-1:0] axi_awaddr;
+    reg                          axi_awen;
+    reg [C_S_AXI_ADDR_WIDTH-1:0] axi_araddr;
+
+    localparam [1:0] AXI_RESP_OKAY = 2'b00;
+
+    assign o_intr = reg_ctrl[0] & reg_status[0];
+
+    // Write Address & Write Data Handshake Logic
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            S_AXI_AWREADY <= 1'b0;
+            axi_awen      <= 1'b1;
+        end else begin
+            if (~S_AXI_AWREADY && S_AXI_AWVALID && S_AXI_WVALID && axi_awen) begin
+                S_AXI_AWREADY <= 1'b1;
+                axi_awen      <= 1'b0;
+            end else if (S_AXI_BREADY && S_AXI_BVALID) begin
+                axi_awen      <= 1'b1;
+                S_AXI_AWREADY <= 1'b0;
+            end else begin
+                S_AXI_AWREADY <= 1'b0;
+            end
+        end
+    end
+
+    // Latch Write Address
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            axi_awaddr <= 0;
+        end else begin
+            if (~S_AXI_AWREADY && S_AXI_AWVALID && S_AXI_WVALID && axi_awen) begin
+                axi_awaddr <= S_AXI_AWADDR;
+            end
+        end
+    end
+
+    // Write Data Ready Handshake
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            S_AXI_WREADY <= 1'b0;
+        end else begin
+            if (~S_AXI_WREADY && S_AXI_WVALID && S_AXI_AWVALID && axi_awen) begin
+                S_AXI_WREADY <= 1'b1;
+            end else begin
+                S_AXI_WREADY <= 1'b0;
+            end
+        end
+    end
+
+    // Register Writing
+    integer byte_index;
+    wire write_en = S_AXI_WREADY && S_AXI_WVALID && S_AXI_AWREADY && S_AXI_AWVALID;
+
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            reg_ctrl   <= 32'h0;
+            reg_status <= 32'h0; 
+            reg_data0  <= 32'h0;
+            reg_data1  <= 32'h0;
+        end else begin
+            reg_status[1] <= (reg_data0 != 32'h0); 
+
+            if (write_en) begin
+                case (axi_awaddr[3:2]) 
+                    2'b00: begin 
+                        for (byte_index = 0; byte_index <= 3; byte_index = byte_index + 1)
+                            if (S_AXI_WSTRB[byte_index] == 1) reg_ctrl[(byte_index*8) +: 8] <= S_AXI_WDATA[(byte_index*8) +: 8];
+                    end
+                    2'b01: begin 
+                    end
+                    2'b10: begin 
+                        for (byte_index = 0; byte_index <= 3; byte_index = byte_index + 1)
+                            if (S_AXI_WSTRB[byte_index] == 1) reg_data0[(byte_index*8) +: 8] <= S_AXI_WDATA[(byte_index*8) +: 8];
+                    end
+                    2'b11: begin 
+                        for (byte_index = 0; byte_index <= 3; byte_index = byte_index + 1)
+                            if (S_AXI_WSTRB[byte_index] == 1) reg_data1[(byte_index*8) +: 8] <= S_AXI_WDATA[(byte_index*8) +: 8];
+                    end
+                    default: begin
+                        reg_ctrl  <= reg_ctrl;
+                        reg_data0 <= reg_data0;
+                        reg_data1 <= reg_data1;
+                    end
+                endcase
+            end
+        end
+    end
+
+    // Write Response Channel Logic
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            S_AXI_BVALID  <= 1'b0;
+            S_AXI_BRESP   <= 2'b00;
+        end else begin
+            if (S_AXI_AWREADY && S_AXI_AWVALID && ~S_AXI_BVALID && S_AXI_WREADY && S_AXI_WVALID) begin
+                S_AXI_BVALID <= 1'b1;
+                S_AXI_BRESP  <= AXI_RESP_OKAY; 
+            end else begin
+                if (S_AXI_BREADY && S_AXI_BVALID) begin
+                    S_AXI_BVALID <= 1'b0;
+                end
+            end
+        end
+    end
+
+    // Read Address Channel Logic
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            S_AXI_ARREADY <= 1'b0;
+            axi_araddr    <= 32'h0;
+        end else begin
+            if (~S_AXI_ARREADY && S_AXI_ARVALID) begin
+                S_AXI_ARREADY <= 1'b1;
+                axi_araddr    <= S_AXI_ARADDR;
+            end else begin
+                S_AXI_ARREADY <= 1'b0;
+            end
+        end
+    end
+
+    // Read Data & Response Channel Logic
+    reg [C_S_AXI_DATA_WIDTH-1:0] reg_data_out;
+
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            S_AXI_RVALID <= 1'b0;
+            S_AXI_RRESP  <= 2'b00;
+        end else begin
+            if (S_AXI_ARREADY && S_AXI_ARVALID && ~S_AXI_RVALID) begin
+                S_AXI_RVALID <= 1'b1;
+                S_AXI_RRESP  <= AXI_RESP_OKAY;
+            end else if (S_AXI_RVALID && S_AXI_RREADY) begin
+                S_AXI_RVALID <= 1'b0;
+            end
+        end
+    end
+
+    // Register Read Selection Multiplexer
+    always @(*) begin
+        case (axi_araddr[3:2])
+            2'b00   : reg_data_out = reg_ctrl;
+            2'b01   : reg_data_out = reg_status;
+            2'b10   : reg_data_out = reg_data0;
+            2'b11   : reg_data_out = reg_data1;
+            default : reg_data_out = 32'h0;
+        endcase
+    end
+
+    // Output Data Pipeline Register
+    always @(posedge S_AXI_ACLK) begin
+        if (S_AXI_ARESETN == 1'b0) begin
+            S_AXI_RDATA  <= 32'h0;
+        end else begin
+            if (S_AXI_ARREADY && S_AXI_ARVALID && ~S_AXI_RVALID) begin
+                S_AXI_RDATA <= reg_data_out;
+            end
+        end
+    end
+
+endmodule
